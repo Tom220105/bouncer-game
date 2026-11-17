@@ -3,7 +3,9 @@
   'use strict';
 
   const KEY_SETTINGS = 'bouncer.settings.v1';
-  const KEY_PROGRESS = 'bouncer.progress.v1';
+  const KEY_PROGRESS = 'bouncer.progress.v2'; // v2: 30 neue Level
+  // ?unlock in der Adresse schaltet zum Testen alle Level frei (wird nicht gespeichert)
+  const UNLOCK_ALL = typeof location !== 'undefined' && new URLSearchParams(location.search).has('unlock');
   const KEY_LAST = 'bouncer.lastLevel';
 
   const DEFAULTS = {
@@ -52,7 +54,7 @@
       save(KEY_PROGRESS, progress);
     },
     isUnlocked(index) {
-      if (index === 0) return true;
+      if (index === 0 || UNLOCK_ALL) return true;
       const prev = B.LEVELS[index - 1];
       return !!(prev && progress[prev.id]);
     },

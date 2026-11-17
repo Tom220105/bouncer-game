@@ -1,4 +1,4 @@
-/* Spielzustand, Eingabe (Zeichnen von Bouncern) und Hauptschleife */
+/* Spielzustand, Bouncer-Steuerung (zeichnen, auswählen, verschieben, drehen) und Hauptschleife */
 (function (B) {
   'use strict';
 
@@ -6,10 +6,14 @@
   const R = B.RULES;
   const PH = B.physics;
   const TAU = Math.PI * 2;
+  const DEG = Math.PI / 180;
+  const SNAP_STEP = 15 * DEG;   // Raster für „Winkel einrasten“
+  const MAGNET = 2.5 * DEG;     // sanftes Einrasten auch ohne Einstellung
+  const MAX_EXTEND = 300;       // so weit darf der Spielbereich über das Entwurfsfeld hinausgehen
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
-  const view = { scale: 1, ox: 0, oy: 0, dpr: 1 };
+  const view = { scale: 1, ox: 0, oy: 0, dpr: 1, css: 1 };
 
   const g = {
     levelIndex: 0,
@@ -18,9 +22,10 @@
     mode: 'build',      // build | run | capture | failed | won
     sim: null,
     trail: [],
-    drawing: null,      // { id, points, fit, valid, reason, short }
-    pressed: null,      // Klick auf vorhandenen Bouncer (zum Entfernen)
+    drag: null,         // laufende Zeiger-Aktion (draw | move | handle)
+    selected: -1,
     hover: -1,
+    history: [],        // Schnappschüsse für „Rückgängig“
     particles: [],
     rings: [],
     preview: null,
@@ -35,11 +40,21 @@
     cubeHidden: false,
     moteTimer: 0,
     lastResult: null,
+    bounds: Object.assign({}, PH.DESIGN_BOUNDS),
+    yaw: Math.PI / 4,
+    mirrorFlash: [],
+    wheelAcc: 0,
+    editAt: 0,
   };
+
+  const px2w = (cssPx) => cssPx / view.css;   // Bildschirm-Pixel → Welteinheiten
+  const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  const copyPt = (p) => ({ x: p.x, y: p.y });
+  const copyList = (list) => list.map((b) => ({ a: copyPt(b.a), b: copyPt(b.b) }));
 
   /* ---------- Level & Ablauf ---------- */
 
-  // Die orange „Schiene“ links vom Würfel (wie im Konzeptbild)
+  // Die orange „Schiene“ hinter dem Würfel
   function railTrail() {
     const c = g.level.cube;
     return [
@@ -54,9 +69,13 @@
     g.levelIndex = index;
     g.level = lvl;
     g.bouncers = [];
+    g.history = [];
     g.particles = [];
     g.rings = [];
-    cancelDrawing();
+    g.selected = -1;
+    g.hover = -1;
+    g.drag = null;
+    g.mirrorFlash = lvl.mirrors.map(() => 0);
     B.progress.lastLevel = index;
     B.ui.onLevelLoaded(lvl, index);
     resetRun();
@@ -68,6 +87,15 @@
     } else {
       loadLevel(index);
     }
+  }
+
+  function hasNext() {
+    const n = g.levelIndex + 1;
+    return n < B.LEVELS.length && B.progress.isUnlocked(n);
+  }
+
+  function nextLevel() {
+    if (hasNext()) loadLevel(g.levelIndex + 1);
   }
 
   function resetRun() {
@@ -85,9 +113,9 @@
 
   function start() {
     if (g.mode !== 'build') return;
-    cancelDrawing();
+    cancelDrag();
     g.hover = -1;
-    g.sim = PH.createSim(g.level);
+    g.sim = PH.createSim(g.level, g.bounds);
     g.trail = railTrail();
     g.mode = 'run';
     g.acc = 0;
@@ -107,43 +135,71 @@
 
   function starsFor(used, par) {
     if (used <= par) return 3;
-    if (used === par + 1) return 2;
+    if (used <= par + 1) return 2;
     return 1;
   }
 
-  /* ---------- Bouncer ---------- */
+  /* ---------- Bouncer verwalten ---------- */
 
   function updateCounter() {
-    B.ui.updateCounter(g.bouncers.length, g.level.maxBouncers);
+    B.ui.updateCounter(g.bouncers.length, g.level.par, g.history.length > 0);
+  }
+
+  function pushHistory(snapshot) {
+    g.history.push(snapshot || copyList(g.bouncers));
+    if (g.history.length > 100) g.history.shift();
+  }
+
+  function changed() {
+    g.previewDirty = true;
+    updateCounter();
+  }
+
+  function validate(a, b, ignore) {
+    return PH.validateBouncer(g.level, g.bouncers, a, b, { bounds: g.bounds, ignore });
   }
 
   function addBouncer(a, b) {
+    pushHistory();
     g.bouncers.push({ a, b, born: g.clock, flash: 0 });
-    g.previewDirty = true;
+    g.selected = g.bouncers.length - 1;
     B.audio.play('place');
     B.ui.hideHint();
-    updateCounter();
+    changed();
   }
 
-  function removeBouncer(i, silent) {
+  function removeBouncer(i) {
     const b = g.bouncers[i];
     if (!b) return;
+    pushHistory();
     g.bouncers.splice(i, 1);
     dustAlong(b);
-    if (!silent) B.audio.play('remove');
+    B.audio.play('remove');
+    g.selected = -1;
     g.hover = -1;
-    g.previewDirty = true;
-    updateCounter();
-  }
-
-  function undo() {
-    if (g.mode === 'build' && g.bouncers.length) removeBouncer(g.bouncers.length - 1);
+    changed();
   }
 
   function clearAll() {
     if (g.mode !== 'build' || !g.bouncers.length) return;
-    for (let i = g.bouncers.length - 1; i >= 0; i--) removeBouncer(i, true);
+    pushHistory();
+    for (const b of g.bouncers) dustAlong(b);
+    g.bouncers = [];
+    g.selected = -1;
+    g.hover = -1;
     B.audio.play('remove');
+    changed();
+  }
+
+  function undo() {
+    if (g.mode !== 'build' || !g.history.length) return;
+    cancelDrag();
+    const snap = g.history.pop();
+    g.bouncers = snap.map((b) => ({ a: b.a, b: b.b, born: -10, flash: 0 }));
+    g.selected = -1;
+    g.hover = -1;
+    B.audio.play('remove');
+    changed();
   }
 
   function hitBouncer(p, tol) {
@@ -155,47 +211,279 @@
     return best;
   }
 
-  /* ---------- Zeichnen ---------- */
-
-  function beginDrawing(p, id) {
-    g.drawing = { id, points: [p], fit: null, valid: false, reason: '', short: true };
+  function snapAngle(a) {
+    const n = Math.round(a / SNAP_STEP) * SNAP_STEP;
+    if (B.settings.snap || Math.abs(a - n) < MAGNET) return n;
+    return a;
   }
 
-  function extendDrawing(p) {
-    const d = g.drawing;
-    const last = d.points[d.points.length - 1];
-    if (Math.hypot(p.x - last.x, p.y - last.y) < 2) return;
-    d.points.push(p);
-    refit();
+  // Kleine Änderungen per Rad/Tastatur werden zu einem Rückgängig-Schritt zusammengefasst
+  function editStep() {
+    const now = performance.now();
+    if (now - g.editAt > 700) pushHistory();
+    g.editAt = now;
   }
 
-  function refit() {
-    const d = g.drawing;
-    if (!d) return;
-    const snap = B.settings.snap ? Math.PI / 12 : 0;
-    d.fit = G.fitStroke(d.points, snap, R.MAX_LEN);
-    if (!d.fit) return;
-    const v = PH.validateBouncer(g.level, g.bouncers, d.fit.a, d.fit.b);
+  function applyEdit(i, a, b) {
+    const v = validate(a, b, i);
+    if (!v.ok) {
+      B.ui.toast(v.reason, 'bad');
+      return false;
+    }
+    editStep();
+    const bo = g.bouncers[i];
+    bo.a = a;
+    bo.b = b;
+    g.selected = i;
+    changed();
+    return true;
+  }
+
+  function rotateBouncer(i, delta) {
+    const b = g.bouncers[i];
+    if (!b) return;
+    const s = G.setSegAngle(b.a, b.b, G.segAngle(b.a, b.b) + delta);
+    applyEdit(i, s.a, s.b);
+  }
+
+  function nudgeBouncer(i, dx, dy) {
+    const b = g.bouncers[i];
+    if (!b) return;
+    applyEdit(i, { x: b.a.x + dx, y: b.a.y + dy }, { x: b.b.x + dx, y: b.b.y + dy });
+  }
+
+  /* ---------- Zeiger-Aktionen ---------- */
+
+  function refitStroke(d) {
+    const fit = G.fitStroke(d.points, 0, R.MAX_LEN);
+    if (!fit) return;
+    const s = G.setSegAngle(fit.a, fit.b, snapAngle(G.segAngle(fit.a, fit.b)));
+    d.fit = { a: s.a, b: s.b, length: fit.length };
+    const v = validate(s.a, s.b, -1);
     d.valid = v.ok;
     d.reason = v.reason || '';
     d.short = !!v.short;
   }
 
-  function finishDrawing() {
-    const d = g.drawing;
-    g.drawing = null;
-    if (!d || !d.fit || d.fit.length < 12) return; // nur ein Klick
-    if (!d.valid) {
-      B.audio.play('error');
-      B.ui.toast(d.reason, 'bad');
-      return;
-    }
-    addBouncer(d.fit.a, d.fit.b);
+  function revalidate(d) {
+    const b = g.bouncers[d.index];
+    const v = validate(b.a, b.b, d.index);
+    d.valid = v.ok;
+    d.reason = v.reason || '';
   }
 
-  function cancelDrawing() {
-    g.drawing = null;
-    g.pressed = null;
+  function cancelDrag() {
+    const d = g.drag;
+    if (d && (d.kind === 'move' || d.kind === 'handle') && d.moved) {
+      const b = g.bouncers[d.index];
+      if (b) { b.a = d.orig.a; b.b = d.orig.b; }
+      g.previewDirty = true;
+    }
+    g.drag = null;
+  }
+
+  function toWorld(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = (e.clientX - r.left) * view.dpr;
+    const y = (e.clientY - r.top) * view.dpr;
+    return { x: (x - view.ox) / view.scale, y: (y - view.oy) / view.scale };
+  }
+
+  function isTouch(e) {
+    return e.pointerType === 'touch' || e.pointerType === 'pen';
+  }
+
+  // Was liegt unter dem Zeiger? (für Klick und Mauszeiger)
+  function pick(p, touch) {
+    if (g.selected >= 0) {
+      const b = g.bouncers[g.selected];
+      if (b) {
+        const del = G.deleteAnchor(b.a, b.b, px2w(30));
+        if (dist(p, del) < px2w(touch ? 20 : 13)) return { what: 'delete', index: g.selected };
+        const ht = px2w(touch ? 22 : 12);
+        const da = dist(p, b.a), db = dist(p, b.b);
+        if (Math.min(da, db) < ht) return { what: 'handle', index: g.selected, end: da <= db ? 'a' : 'b' };
+      }
+    }
+    const hit = hitBouncer(p, px2w(touch ? 16 : 9) + R.BOUNCER_R);
+    if (hit >= 0) return { what: 'bouncer', index: hit };
+    return { what: 'empty' };
+  }
+
+  function onPointerDown(e) {
+    B.audio.unlock();
+    if (B.ui.isModalOpen() || g.mode !== 'build') return;
+    const p = toWorld(e);
+    const touch = isTouch(e);
+
+    if (e.pointerType === 'mouse' && e.button === 2) {
+      const i = hitBouncer(p, px2w(10) + R.BOUNCER_R);
+      if (i >= 0) removeBouncer(i);
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (g.drag) return; // zweiter Finger
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
+
+    const target = pick(p, touch);
+    const id = e.pointerId;
+    if (target.what === 'delete') {
+      removeBouncer(target.index);
+    } else if (target.what === 'handle') {
+      const b = g.bouncers[target.index];
+      g.drag = {
+        kind: 'handle', id, index: target.index, end: target.end,
+        orig: { a: copyPt(b.a), b: copyPt(b.b) }, before: copyList(g.bouncers),
+        moved: false, valid: true, reason: '',
+      };
+    } else if (target.what === 'bouncer') {
+      const b = g.bouncers[target.index];
+      g.selected = target.index;
+      g.drag = {
+        kind: 'move', id, index: target.index, start: p,
+        orig: { a: copyPt(b.a), b: copyPt(b.b) }, before: copyList(g.bouncers),
+        moved: false, valid: true, reason: '',
+      };
+    } else {
+      g.selected = -1;
+      g.drag = { kind: 'draw', id, points: [p], fit: null, valid: false, reason: '', short: true, moved: false };
+    }
+    updateCursor(p, touch);
+  }
+
+  function onPointerMove(e) {
+    const p = toWorld(e);
+    const d = g.drag;
+    if (d && e.pointerId === d.id) {
+      if (d.kind === 'draw') {
+        const last = d.points[d.points.length - 1];
+        if (dist(p, last) < 2) return;
+        d.points.push(p);
+        d.moved = true;
+        refitStroke(d);
+      } else if (d.kind === 'move') {
+        const dx = p.x - d.start.x, dy = p.y - d.start.y;
+        if (!d.moved && Math.hypot(dx, dy) < px2w(4)) return;
+        d.moved = true;
+        const b = g.bouncers[d.index];
+        b.a = { x: d.orig.a.x + dx, y: d.orig.a.y + dy };
+        b.b = { x: d.orig.b.x + dx, y: d.orig.b.y + dy };
+        revalidate(d);
+      } else if (d.kind === 'handle') {
+        d.moved = true;
+        const b = g.bouncers[d.index];
+        const fixed = d.end === 'a' ? d.orig.b : d.orig.a;
+        const ang = snapAngle(Math.atan2(p.y - fixed.y, p.x - fixed.x));
+        const len = Math.min(R.MAX_LEN, Math.max(R.MIN_LEN, dist(p, fixed)));
+        const moving = { x: fixed.x + Math.cos(ang) * len, y: fixed.y + Math.sin(ang) * len };
+        if (d.end === 'a') { b.a = moving; b.b = copyPt(fixed); }
+        else { b.b = moving; b.a = copyPt(fixed); }
+        revalidate(d);
+      }
+      g.previewDirty = true;
+      return;
+    }
+    if (e.pointerType === 'mouse' && g.mode === 'build' && !B.ui.isModalOpen()) {
+      g.hover = hitBouncer(p, px2w(9) + R.BOUNCER_R);
+      updateCursor(p, false);
+    }
+  }
+
+  function onPointerUp(e) {
+    const d = g.drag;
+    if (!d || e.pointerId !== d.id) return;
+    g.drag = null;
+    if (d.kind === 'draw') {
+      if (!d.fit || d.fit.length < 12) return; // nur ein Klick ins Leere
+      if (!d.valid) {
+        B.audio.play('error');
+        B.ui.toast(d.reason, 'bad');
+        return;
+      }
+      addBouncer(d.fit.a, d.fit.b);
+    } else if (d.moved) {
+      const b = g.bouncers[d.index];
+      if (!d.valid) {
+        b.a = d.orig.a;
+        b.b = d.orig.b;
+        B.audio.play('error');
+        B.ui.toast(d.reason, 'bad');
+      } else {
+        pushHistory(d.before);
+        B.audio.play('place');
+      }
+      changed();
+    }
+    updateCursor(toWorld(e), isTouch(e));
+  }
+
+  function updateCursor(p, touch) {
+    if (g.mode !== 'build') { canvas.style.cursor = ''; return; }
+    if (g.drag) { canvas.style.cursor = g.drag.kind === 'draw' ? 'crosshair' : 'grabbing'; return; }
+    if (touch) return;
+    const t = pick(p, false);
+    canvas.style.cursor = t.what === 'delete' ? 'pointer'
+      : t.what === 'handle' ? 'grab'
+      : t.what === 'bouncer' ? (t.index === g.selected ? 'move' : 'pointer')
+      : '';
+  }
+
+  function onWheel(e) {
+    if (g.mode !== 'build' || B.ui.isModalOpen() || g.drag) return;
+    const p = toWorld(e);
+    let i = hitBouncer(p, px2w(14) + R.BOUNCER_R);
+    if (i < 0) i = g.selected;
+    if (i < 0) return;
+    e.preventDefault();
+    const delta = (e.deltaMode === 1 ? 33 : 1) * (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX);
+    g.wheelAcc += delta;
+    const STEP = 100; // eine Mausrad-Raste ≈ 100 → 5°
+    while (Math.abs(g.wheelAcc) >= STEP) {
+      const dir = Math.sign(g.wheelAcc);
+      g.wheelAcc -= dir * STEP;
+      rotateBouncer(i, dir * (e.shiftKey ? 1 : 5) * DEG);
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Escape') {
+      if (B.ui.closeTopModal()) return;
+      if (g.drag) cancelDrag();
+      else g.selected = -1;
+      return;
+    }
+    if (B.ui.isModalOpen()) return;
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    const key = e.key.toLowerCase();
+
+    if (e.code === 'Space' || e.key === 'Enter') {
+      if (tag === 'BUTTON') return; // Button übernimmt selbst
+      e.preventDefault();
+      B.audio.unlock();
+      toggleRun();
+      return;
+    }
+    if (key === 'z' && !e.altKey) {
+      e.preventDefault();
+      undo();
+      return;
+    }
+    if (g.mode !== 'build' || g.drag) return;
+    const sel = g.selected;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && sel >= 0) {
+      e.preventDefault();
+      removeBouncer(sel);
+    } else if ((key === 'q' || key === 'e') && sel >= 0) {
+      e.preventDefault();
+      rotateBouncer(sel, (key === 'q' ? -1 : 1) * (e.shiftKey ? 15 : 5) * DEG);
+    } else if (e.key.startsWith('Arrow') && sel >= 0) {
+      e.preventDefault();
+      const s = e.shiftKey ? 20 : 4;
+      const dx = e.key === 'ArrowLeft' ? -s : e.key === 'ArrowRight' ? s : 0;
+      const dy = e.key === 'ArrowUp' ? -s : e.key === 'ArrowDown' ? s : 0;
+      nudgeBouncer(sel, dx, dy);
+    }
   }
 
   /* ---------- Effekte ---------- */
@@ -286,8 +574,8 @@
   function handleEvents(events) {
     for (const ev of events) {
       if (ev.type === 'bounce') {
-        const b = g.bouncers[ev.index];
-        if (b) b.flash = 1;
+        if (ev.kind === 'mirror') g.mirrorFlash[ev.index] = 1;
+        else if (g.bouncers[ev.index]) g.bouncers[ev.index].flash = 1;
         const v = g.sim.vel;
         burst(ev.x, ev.y, 14, { angle: Math.atan2(v.y, v.x), spread: 1.6, min: 120, max: 420, life: 0.35, size: 2.2, drag: 5 });
         ring(ev.x, ev.y, 6, 46, 0.35, 1, 2);
@@ -341,6 +629,14 @@
     g.shake = Math.max(0, g.shake - dt * 3.5);
     g.portalPulse = Math.max(0, g.portalPulse - dt * 1.6);
     for (const b of g.bouncers) b.flash = Math.max(0, b.flash - dt * 3);
+    for (let i = 0; i < g.mirrorFlash.length; i++) g.mirrorFlash[i] = Math.max(0, g.mirrorFlash[i] - dt * 3);
+
+    // Würfel dreht sich um die eigene Hochachse – im Flug schneller
+    let rate = 0.9;
+    if (g.mode === 'run' && g.sim) rate = 2.6 + Math.min(8, Math.abs(g.sim.spin) * 0.5);
+    else if (g.mode === 'capture') rate = 11;
+    else if (g.mode === 'failed' || g.mode === 'won') rate = 0;
+    if (!paused) g.yaw = (g.yaw + rate * dt) % TAU;
 
     if (!paused) {
       if (g.mode === 'run' || g.mode === 'capture') {
@@ -359,7 +655,7 @@
         if (g.failTimer <= 0) resetRun();
       } else if (g.mode === 'won' && g.winTimer > 0) {
         g.winTimer -= dt;
-        if (g.winTimer <= 0) B.ui.showWin(g.lastResult, g.levelIndex);
+        if (g.winTimer <= 0) B.ui.showWin(g.lastResult, g.levelIndex, hasNext());
       }
     }
     updateParticles(dt);
@@ -369,90 +665,7 @@
   function updatePreview() {
     if (!B.settings.preview || g.mode !== 'build' || !g.previewDirty) return;
     g.previewDirty = false;
-    g.preview = PH.predict(g.level, g.bouncers, 6);
-  }
-
-  /* ---------- Eingabe ---------- */
-
-  function toWorld(e) {
-    const r = canvas.getBoundingClientRect();
-    const x = (e.clientX - r.left) * view.dpr;
-    const y = (e.clientY - r.top) * view.dpr;
-    return { x: (x - view.ox) / view.scale, y: (y - view.oy) / view.scale };
-  }
-
-  function onPointerDown(e) {
-    B.audio.unlock();
-    if (B.ui.isModalOpen() || g.mode !== 'build') return;
-    const p = toWorld(e);
-    if (e.pointerType === 'mouse' && e.button === 2) {
-      const i = hitBouncer(p, 16);
-      if (i >= 0) removeBouncer(i);
-      return;
-    }
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (g.drawing || g.pressed) return; // zweiter Finger
-    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
-    const hit = hitBouncer(p, e.pointerType === 'touch' ? 24 : 14);
-    if (hit >= 0) {
-      g.pressed = { id: e.pointerId, index: hit, x: p.x, y: p.y };
-      return;
-    }
-    beginDrawing(p, e.pointerId);
-  }
-
-  function onPointerMove(e) {
-    const p = toWorld(e);
-    if (g.drawing && e.pointerId === g.drawing.id) {
-      extendDrawing(p);
-      return;
-    }
-    if (g.pressed && e.pointerId === g.pressed.id) {
-      // Bewegt man sich vom Bouncer weg, wird daraus ein neuer Strich
-      if (Math.hypot(p.x - g.pressed.x, p.y - g.pressed.y) > 10) {
-        const startP = { x: g.pressed.x, y: g.pressed.y };
-        const id = g.pressed.id;
-        g.pressed = null;
-        beginDrawing(startP, id);
-        extendDrawing(p);
-      }
-      return;
-    }
-    if (e.pointerType === 'mouse' && g.mode === 'build' && !B.ui.isModalOpen()) {
-      g.hover = hitBouncer(p, 14);
-      canvas.style.cursor = g.hover >= 0 ? 'pointer' : '';
-    }
-  }
-
-  function onPointerUp(e) {
-    if (g.drawing && e.pointerId === g.drawing.id) {
-      finishDrawing();
-    } else if (g.pressed && e.pointerId === g.pressed.id) {
-      const i = g.pressed.index;
-      g.pressed = null;
-      removeBouncer(i);
-    }
-  }
-
-  function onKeyDown(e) {
-    if (e.key === 'Escape') {
-      if (B.ui.closeTopModal()) return;
-      cancelDrawing();
-      return;
-    }
-    if (B.ui.isModalOpen()) return;
-    const tag = e.target && e.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-    if (e.code === 'Space' || e.key === 'Enter') {
-      if (tag === 'BUTTON') return; // Button übernimmt selbst
-      e.preventDefault();
-      B.audio.unlock();
-      toggleRun();
-    } else if ((e.key === 'z' || e.key === 'Z' || e.key === 'Backspace') && !e.altKey) {
-      e.preventDefault();
-      undo();
-    }
+    g.preview = PH.predict(g.level, g.bouncers, 8, g.bounds);
   }
 
   /* ---------- Darstellung ---------- */
@@ -462,18 +675,29 @@
     const w = window.innerWidth, h = window.innerHeight;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
-    // Oben und unten Platz für das Overlay lassen
+    // Das Entwurfsfeld passt zwischen die Leisten; alles drumherum ist ebenfalls spielbar
     const short = h < 520;
-    const padTop = short ? 60 : w < 640 ? 64 : 76;
-    const padBottom = short ? 52 : w < 640 ? 80 : 92;
-    const padX = w < 640 ? 12 : 32;
+    const padTop = short ? 52 : w < 640 ? 60 : 64;
+    const padBottom = short ? 50 : w < 640 ? 74 : 80;
+    const padX = w < 640 ? 8 : 16;
     const availW = Math.max(100, w - padX * 2);
     const availH = Math.max(100, h - padTop - padBottom);
     const s = Math.min(availW / B.WORLD.w, availH / B.WORLD.h);
     view.dpr = dpr;
+    view.css = s;
     view.scale = s * dpr;
     view.ox = ((w - B.WORLD.w * s) / 2) * dpr;
     view.oy = (padTop + (availH - B.WORLD.h * s) / 2) * dpr;
+
+    const vx0 = -view.ox / view.scale, vy0 = -view.oy / view.scale;
+    const vx1 = (canvas.width - view.ox) / view.scale, vy1 = (canvas.height - view.oy) / view.scale;
+    g.bounds = {
+      x0: Math.max(vx0, -MAX_EXTEND),
+      y0: Math.max(vy0, -MAX_EXTEND),
+      x1: Math.min(vx1, B.WORLD.w + MAX_EXTEND),
+      y1: Math.min(vy1, B.WORLD.h + MAX_EXTEND),
+    };
+    g.previewDirty = true;
   }
 
   function frame(now) {
@@ -493,21 +717,23 @@
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
-    canvas.addEventListener('pointercancel', cancelDrawing);
-    canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') g.hover = -1; });
+    canvas.addEventListener('pointercancel', cancelDrag);
+    canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !g.drag) g.hover = -1; });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
     requestAnimationFrame(frame);
   }
 
   function onSettingsChanged(key) {
     if (key === 'preview') g.previewDirty = true;
-    if (key === 'snap' && g.drawing) refit();
+    if (key === 'snap' && g.drag && g.drag.kind === 'draw') refitStroke(g.drag);
   }
 
   B.game = {
-    init, loadLevel, selectLevel, start, toggleRun, resetRun, afterWin,
-    undo, clearAll, cancelDrawing, onSettingsChanged,
+    init, loadLevel, selectLevel, nextLevel, hasNext, start, toggleRun, resetRun, afterWin,
+    undo, clearAll, cancelDrag, onSettingsChanged, starsFor,
     get state() { return g; },
+    get view() { return view; },
   };
 })(globalThis.Bouncer = globalThis.Bouncer || {});

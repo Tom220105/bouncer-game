@@ -86,5 +86,64 @@
     return { a, b, length: half * 2, clamped };
   }
 
-  B.geo = { closestPoint, distPointSeg, segmentsIntersect, distSegSeg, fitStroke };
+  /** Abstand Punkt–Strecke mit Skalaren (schnell, ohne Objekte – für die Simulation). */
+  function distPS(px, py, ax, ay, bx, by) {
+    const abx = bx - ax, aby = by - ay;
+    const len2 = abx * abx + aby * aby;
+    let t = len2 > 0 ? ((px - ax) * abx + (py - ay) * aby) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = px - (ax + abx * t), dy = py - (ay + aby * t);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function pointInRect(p, r) {
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+  }
+
+  /** Schneidet oder berührt die Strecke a–b das Rechteck r (optional um pad vergrößert)? */
+  function segRectIntersect(a, b, r, pad) {
+    const q = pad ? { x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 } : r;
+    if (pointInRect(a, q) || pointInRect(b, q)) return true;
+    const c = [
+      { x: q.x, y: q.y }, { x: q.x + q.w, y: q.y },
+      { x: q.x + q.w, y: q.y + q.h }, { x: q.x, y: q.y + q.h },
+    ];
+    for (let i = 0; i < 4; i++) {
+      if (segmentsIntersect(a, b, c[i], c[(i + 1) % 4])) return true;
+    }
+    return false;
+  }
+
+  /** Winkel einer Strecke (Radiant). */
+  function segAngle(a, b) {
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  }
+
+  /** Strecke um ihre Mitte auf einen neuen Winkel drehen (Länge bleibt). */
+  function setSegAngle(a, b, angle) {
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const h = Math.hypot(b.x - a.x, b.y - a.y) / 2;
+    const ux = Math.cos(angle), uy = Math.sin(angle);
+    return { a: { x: mx - ux * h, y: my - uy * h }, b: { x: mx + ux * h, y: my + uy * h } };
+  }
+
+  /** Lage des Löschen-Knopfs: über der Mitte, senkrecht zur Strecke (immer nach oben). */
+  function deleteAnchor(a, b, offset) {
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    let nx = -(b.y - a.y) / L, ny = (b.x - a.x) / L;
+    if (ny > 0 || (ny === 0 && nx > 0)) { nx = -nx; ny = -ny; }
+    return { x: (a.x + b.x) / 2 + nx * offset, y: (a.y + b.y) / 2 + ny * offset };
+  }
+
+  /** Winkel einer Strecke in Grad, 0–179, gegen den Uhrzeigersinn zur Horizontalen. */
+  function displayDegrees(a, b) {
+    let d = Math.round((Math.atan2(-(b.y - a.y), b.x - a.x) * 180) / Math.PI);
+    d = ((d % 180) + 180) % 180;
+    return d;
+  }
+
+  B.geo = {
+    closestPoint, distPointSeg, segmentsIntersect, distSegSeg, fitStroke,
+    distPS, pointInRect, segRectIntersect, segAngle, setSegAngle, deleteAnchor, displayDegrees,
+  };
 })(globalThis.Bouncer = globalThis.Bouncer || {});

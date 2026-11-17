@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bouncer – Level prüfen</title>
+  <style>
+    :root { color-scheme: dark; --line: rgba(255,255,255,.1); --muted: #8b8680; --accent: #ff7a12; }
+    body { margin: 0; padding: 24px; background: #161616; color: #ebe7e2; font: 14px/1.4 -apple-system, system-ui, sans-serif; }
+    h1 { font-size: 16px; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 6px; }
+    p { color: var(--muted); margin: 0 0 16px; }
+    .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+    button, input { background: #222; color: inherit; border: 1px solid var(--line); border-radius: 8px; height: 32px; padding: 0 12px; font: inherit; }
+    button { cursor: pointer; }
+    button.primary { background: var(--accent); color: #1a0c02; border-color: var(--accent); font-weight: 600; }
+    input { width: 64px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+    .card { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #1b1b1b; }
+    .card canvas { display: block; width: 100%; aspect-ratio: 16 / 9; }
+    .meta { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; font-size: 13px; }
+    .meta b { font-family: ui-monospace, Menlo, monospace; color: var(--accent); margin-right: 6px; }
+    .ok { color: #8fd18f; } .warn { color: #ffcf6e; } .bad { color: #ff8a80; } .run { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Level prüfen</h1>
+  <p>Der Löser sucht für jedes Level eine Lösung mit möglichst wenigen Bouncern (Strahlsuche, nicht garantiert minimal).</p>
+  <div class="bar">
+    <label>von <input id="from" type="number" min="1" value="1"></label>
+    <label>bis <input id="to" type="number" min="1" value="30"></label>
+    <button class="primary" id="run">Prüfen</button>
+    <span id="status" class="run"></span>
+  </div>
+  <div class="grid" id="grid"></div>
+
+  <script src="../js/geometry.js"></script>
+  <script src="../js/levels.js"></script>
+  <script src="../js/physics.js"></script>
+  <script src="../js/storage.js"></script>
+  <script src="../js/render.js"></script>
+  <script src="solver.js"></script>
+  <script>
+    (function (B) {
+      const grid = document.getElementById('grid');
+      const status = document.getElementById('status');
+      const params = new URLSearchParams(location.search);
+      document.getElementById('to').value = params.get('to') || B.LEVELS.length;
+      document.getElementById('from').value = params.get('from') || 1;
+      window.__results = {};
+
+      function railTrail(level) {
+        const c = level.cube;
+        return [{ x: c.x - Math.cos(c.angle) * 4000, y: c.y - Math.sin(c.angle) * 4000 }, { x: c.x, y: c.y }];
+      }
+
+      function draw(canvas, level, bouncers) {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = 480 * dpr; canvas.height = 270 * dpr;
+        const ctx = canvas.getContext('2d');
+        const s = (480 / 1600) * dpr;
+        const bs = bouncers.map((b) => ({ a: b.a, b: b.b, born: -10, flash: 0 }));
+        B.settings.preview = true;
+        B.settings.glow = true;
+        const g = {
+          level, bounds: B.physics.DESIGN_BOUNDS, bouncers: bs, mode: 'build', sim: null,
+          trail: railTrail(level), preview: B.physics.predict(level, bs, 16), particles: [], rings: [],
+          clock: 0, shake: 0, portalPulse: 0, cubeHidden: false, yaw: Math.PI / 4,
+          selected: -1, hover: -1, drag: null, mirrorFlash: [],
+        };
+        B.render.frame(ctx, { scale: s, ox: 0, oy: 0, dpr }, g);
+      }
+
+      // Anteil leicht verwackelter Varianten (±3°, ±6 Einheiten), die noch treffen
+      function tolerance(level, bouncers, n = 80) {
+        if (!bouncers.length) return 1;
+        let ok = 0;
+        for (let k = 0; k < n; k++) {
+          const pert = bouncers.map((b) => {
+            const ang = B.geo.segAngle(b.a, b.b) + (Math.random() - 0.5) * 2 * (3 * Math.PI / 180);
+            const s = B.geo.setSegAngle(b.a, b.b, ang);
+            const dx = (Math.random() - 0.5) * 12, dy = (Math.random() - 0.5) * 12;
+            return { a: { x: s.a.x + dx, y: s.a.y + dy }, b: { x: s.b.x + dx, y: s.b.y + dy } };
+          });
+          if (B.solver.fullCheck(level, pert, B.physics.DESIGN_BOUNDS)) ok++;
+        }
+        return ok / n;
+      }
+
+      function card(i) {
+        const level = B.LEVELS[i];
+        const el = document.createElement('div');
+        el.className = 'card';
+        el.innerHTML = `<canvas></canvas><div class="meta"><span><b>${String(i + 1).padStart(2, '0')}</b>${level.name}</span><span class="run">wartet…</span></div>`;
+        grid.appendChild(el);
+        draw(el.querySelector('canvas'), level, []);
+        return el;
+      }
+
+      async function run() {
+        const from = Math.max(1, +document.getElementById('from').value) - 1;
+        const to = Math.min(B.LEVELS.length, +document.getElementById('to').value);
+        grid.innerHTML = '';
+        const cards = [];
+        for (let i = from; i < to; i++) cards[i] = card(i);
+        for (let i = from; i < to; i++) {
+          const level = B.LEVELS[i];
+          const info = cards[i].querySelector('.meta span:last-child');
+          info.textContent = 'sucht…';
+          status.textContent = `Level ${i + 1} …`;
+          const res = await B.solver.solve(level, {}, (p) => { info.textContent = `Tiefe ${p.depth} · ${p.evaluated}`; });
+          const tol = res.solved ? tolerance(level, res.bouncers) : 0;
+          window.__results[i + 1] = { name: level.name, par: level.par, found: res.par, solved: res.solved, ms: Math.round(res.ms), tol: Math.round(tol * 100), bouncers: res.bouncers };
+          if (res.solved) {
+            draw(cards[i].querySelector('canvas'), level, res.bouncers);
+            const cls = res.par === level.par ? 'ok' : res.par < level.par ? 'warn' : 'bad';
+            info.className = cls;
+            info.textContent = `gelöst mit ${res.par} · Par ${level.par} · Toleranz ${Math.round(tol * 100)} %`;
+          } else {
+            info.className = 'bad';
+            info.textContent = `keine Lösung gefunden · ${(res.ms / 1000).toFixed(1)} s`;
+          }
+        }
+        status.textContent = 'fertig';
+        window.__done = true;
+      }
+
+      document.getElementById('run').addEventListener('click', run);
+      if (params.has('auto')) run();
+      else for (let i = 0; i < B.LEVELS.length; i++) card(i);
+    })(globalThis.Bouncer);
+  </script>
+</body>
+</html>

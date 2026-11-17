@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#161616">
   <title>Bouncer</title>
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body data-mode="build">
   <canvas id="game" aria-label="Spielfeld: Zeichne Bouncer, um den Würfel ins Portal zu lenken"></canvas>
@@ -32,11 +32,12 @@
     <p class="rotate-hint">Tipp: Gerät quer halten</p>
 
     <footer class="controlbar">
-      <div class="counter" id="counter" title="Gesetzte Bouncer">
-        <span class="pips" id="pips"></span>
-        <span class="counter-text"><b id="countUsed">0</b>/<span id="countMax">3</span></span>
+      <div class="counter" id="counter" title="Gesetzte Bouncer · Par = höchstens so viele für 3 Sterne">
+        <span class="mini-stars" id="miniStars" aria-hidden="true"></span>
+        <span class="counter-text"><b id="countUsed">0</b> Bouncer</span>
+        <span class="par" id="parLabel">Par 1</span>
       </div>
-      <button class="btn btn-ghost btn-icon" id="btnUndo" type="button" title="Letzten Bouncer entfernen (Z)" aria-label="Rückgängig">
+      <button class="btn btn-ghost btn-icon" id="btnUndo" type="button" title="Rückgängig (Z)" aria-label="Rückgängig">
         <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
       </button>
       <button class="btn btn-ghost" id="btnClear" type="button" title="Alle Bouncer entfernen">Leeren</button>
@@ -53,15 +54,16 @@
   <!-- Level-Auswahl -->
   <div class="modal" data-modal="levels" hidden>
     <div class="modal-backdrop" data-close></div>
-    <section class="panel" role="dialog" aria-modal="true" aria-labelledby="levelsTitle" tabindex="-1">
+    <section class="panel panel-levels" role="dialog" aria-modal="true" aria-labelledby="levelsTitle" tabindex="-1">
       <header class="panel-head">
         <h2 id="levelsTitle">Level</h2>
+        <span class="panel-meta" id="levelsMeta"></span>
         <button class="icon-btn" type="button" data-close aria-label="Schließen">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
-      <div class="level-grid" id="levelGrid"></div>
-      <p class="panel-foot">Weitere Level folgen.</p>
+      <div id="levelGrid"></div>
+      <p class="panel-foot">Schaffe ein Level, um das nächste freizuschalten.</p>
     </section>
   </div>
 
@@ -101,11 +103,16 @@
 
       <h3 class="section-title">Steuerung</h3>
       <dl class="keys">
-        <dt>Ziehen</dt><dd>Bouncer zeichnen</dd>
-        <dt>Klick auf Bouncer</dt><dd>Entfernen</dd>
+        <dt>Ziehen ins Leere</dt><dd>Bouncer zeichnen</dd>
+        <dt>Klick auf Bouncer</dt><dd>Auswählen</dd>
+        <dt>Bouncer ziehen</dt><dd>Verschieben</dd>
+        <dt>Endpunkt ziehen</dt><dd>Drehen &amp; Länge ändern</dd>
+        <dt>Mausrad · <kbd>Q</kbd> <kbd>E</kbd></dt><dd>Drehen (mit <kbd>⇧</kbd> feiner bzw. gröber)</dd>
+        <dt><kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd></dt><dd>Feinjustieren</dd>
+        <dt>× · <kbd>Entf</kbd> · Rechtsklick</dt><dd>Löschen</dd>
+        <dt><kbd>Z</kbd></dt><dd>Rückgängig</dd>
         <dt><kbd>Leertaste</kbd></dt><dd>Start / Stopp</dd>
-        <dt><kbd>Z</kbd></dt><dd>Letzten Bouncer entfernen</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Menü schließen</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Auswahl aufheben / Menü schließen</dd>
       </dl>
 
       <button class="btn btn-ghost btn-block btn-danger" id="btnResetProgress" type="button">Fortschritt zurücksetzen</button>
@@ -121,21 +128,22 @@
       <div class="stars" id="winStars"></div>
       <p class="win-stats" id="winStats"></p>
       <div class="panel-actions">
-        <button class="btn btn-ghost" id="btnWinLevels" type="button">Level-Auswahl</button>
-        <button class="btn btn-primary" id="btnWinRetry" type="button">Nochmal</button>
+        <button class="btn btn-ghost" id="btnWinLevels" type="button">Level</button>
+        <button class="btn btn-ghost" id="btnWinRetry" type="button">Nochmal</button>
+        <button class="btn btn-primary" id="btnWinNext" type="button">Weiter</button>
       </div>
       <p class="panel-foot" id="winNote"></p>
     </section>
   </div>
 
-  <script src="js/geometry.js"></script>
-  <script src="js/levels.js"></script>
-  <script src="js/physics.js"></script>
-  <script src="js/storage.js"></script>
-  <script src="js/audio.js"></script>
-  <script src="js/render.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/main.js"></script>
+  <script src="js/geometry.js?v=2"></script>
+  <script src="js/levels.js?v=2"></script>
+  <script src="js/physics.js?v=2"></script>
+  <script src="js/storage.js?v=2"></script>
+  <script src="js/audio.js?v=2"></script>
+  <script src="js/render.js?v=2"></script>
+  <script src="js/ui.js?v=2"></script>
+  <script src="js/game.js?v=2"></script>
+  <script src="js/main.js?v=2"></script>
 </body>
 </html>

@@ -119,15 +119,17 @@ body:not([data-mode="build"]) #game { cursor: default; }
   color: var(--muted);
 }
 .counter b { color: var(--text); font-weight: 600; }
-.counter.full b { color: var(--accent); }
-.pips { display: flex; gap: 4px; }
-.pip {
-  width: 14px; height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.12);
-  transition: background 0.2s, box-shadow 0.2s;
+.counter-text { font-family: var(--font); font-size: 13px; white-space: nowrap; }
+.counter .par {
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
 }
-.pip.on { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.counter.over .par { color: var(--dim); }
+.mini-stars { display: flex; gap: 2px; }
+.mini-stars .star svg { width: 11px; height: 11px; }
 
 /* ---------- Buttons ---------- */
 
@@ -293,10 +295,33 @@ body:not([data-mode="build"]) #game { cursor: default; }
 }
 
 /* Level-Auswahl */
+.panel-levels { width: min(540px, 100%); }
+.panel-levels .panel-head { gap: 12px; }
+.panel-levels .panel-head h2 { margin-right: auto; }
+.panel-meta, .chapter-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 500 12px/1 var(--mono);
+  color: var(--muted);
+}
+.panel-meta svg, .chapter-stars svg { width: 12px; height: 12px; fill: var(--accent); }
+.chapter + .chapter { margin-top: 18px; }
+.chapter-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
 .level-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 8px;
 }
 .level-tile {
   appearance: none;
@@ -305,12 +330,13 @@ body:not([data-mode="build"]) #game { cursor: default; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 0;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: #151515;
   color: var(--text);
-  font: 600 20px/1 var(--mono);
+  font: 600 15px/1 var(--mono);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
@@ -323,12 +349,15 @@ body:not([data-mode="build"]) #game { cursor: default; }
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent), 0 0 20px rgba(255, 122, 18, 0.15);
 }
+.level-tile.done { background: #17140f; }
 .level-tile.locked { color: #3b3936; cursor: default; }
 .tile-lock .ico, .tile-lock svg {
-  width: 14px; height: 14px;
+  width: 12px; height: 12px;
   fill: none; stroke: currentColor; stroke-width: 2;
+  display: block;
 }
-.tile-stars { display: flex; gap: 2px; }
+.tile-stars { display: flex; gap: 1px; }
+.tile-stars .star svg { width: 9px; height: 9px; }
 
 .star svg { width: 12px; height: 12px; fill: #333; display: block; }
 .star.on svg { fill: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
@@ -422,8 +451,10 @@ kbd {
 .stars .star svg { width: 34px; height: 34px; }
 .stars .star { animation: starIn 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.4) both; animation-delay: var(--d, 0ms); }
 .win-stats { margin: 0 0 20px; font: 500 13px/1 var(--mono); color: var(--muted); }
-.panel-actions { display: flex; gap: 10px; justify-content: center; }
-.panel-actions .btn { flex: 1; }
+.panel-actions { display: flex; gap: 8px; justify-content: center; }
+.panel-actions .btn { flex: 1; padding: 0 10px; min-width: 0; }
+.panel-actions .btn[hidden] { display: none; }
+.panel-win { width: min(380px, 100%); }
 
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
@@ -439,7 +470,8 @@ kbd {
   .pip { width: 10px; }
   .btn-primary { min-width: 92px; padding: 0 14px; }
   .toast { bottom: 76px; }
-  .level-grid { gap: 8px; }
+  .level-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .counter .par { display: none; }
 }
 
 /* Niedrige Fenster (z. B. Handy quer): kompakte Leisten */

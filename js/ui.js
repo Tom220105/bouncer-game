@@ -21,7 +21,7 @@
   function openModal(name) {
     const m = modalEl(name);
     if (!m || !m.hidden) return;
-    B.game.cancelDrawing();
+    B.game.cancelDrag();
     m.hidden = false;
     stack.push(name);
     B.audio.play('ui');
@@ -55,32 +55,48 @@
   }
 
   function renderLevelGrid() {
-    const grid = els.levelGrid;
+    const root = els.levelGrid;
     const current = B.game.state.levelIndex;
-    grid.innerHTML = '';
-    const slots = Math.max(B.LEVEL_SLOTS, B.LEVELS.length);
-    for (let i = 0; i < slots; i++) {
-      const lvl = B.LEVELS[i];
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'level-tile';
-      if (!lvl || !B.progress.isUnlocked(i)) {
-        btn.classList.add('locked');
-        btn.disabled = true;
-        btn.title = lvl ? 'Gesperrt' : 'Bald verfügbar';
-        btn.innerHTML = `<span class="tile-num">${pad(i + 1)}</span><span class="tile-lock">${LOCK}</span>`;
-      } else {
-        const rec = B.progress.get(lvl.id);
-        if (i === current) btn.classList.add('current');
-        btn.title = lvl.name;
-        btn.innerHTML = `<span class="tile-num">${pad(i + 1)}</span><span class="tile-stars">${starsHtml(rec ? rec.stars : 0)}</span>`;
-        btn.addEventListener('click', () => {
-          closeModal('levels');
-          B.game.selectLevel(i);
-        });
+    root.innerHTML = '';
+    let total = 0;
+
+    B.CHAPTERS.forEach((ch, c) => {
+      const section = document.createElement('section');
+      section.className = 'chapter';
+      const levels = B.LEVELS.filter((l) => l.chapter === c);
+      const earned = levels.reduce((sum, l) => sum + ((B.progress.get(l.id) || {}).stars || 0), 0);
+      total += earned;
+      section.innerHTML = `<h3 class="chapter-title"><span>${pad(c + 1)} · ${ch.title}</span><span class="chapter-stars">${earned}/${levels.length * 3} ${STAR}</span></h3>`;
+      const grid = document.createElement('div');
+      grid.className = 'level-grid';
+
+      for (let i = ch.start; i < ch.start + ch.count && i < B.LEVELS.length; i++) {
+        const lvl = B.LEVELS[i];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'level-tile';
+        if (!B.progress.isUnlocked(i)) {
+          btn.classList.add('locked');
+          btn.disabled = true;
+          btn.title = `${lvl.name} – gesperrt`;
+          btn.innerHTML = `<span class="tile-num">${pad(i + 1)}</span><span class="tile-lock">${LOCK}</span>`;
+        } else {
+          const rec = B.progress.get(lvl.id);
+          if (i === current) btn.classList.add('current');
+          if (rec) btn.classList.add('done');
+          btn.title = lvl.name;
+          btn.innerHTML = `<span class="tile-num">${pad(i + 1)}</span><span class="tile-stars">${starsHtml(rec ? rec.stars : 0)}</span>`;
+          btn.addEventListener('click', () => {
+            closeModal('levels');
+            B.game.selectLevel(i);
+          });
+        }
+        grid.appendChild(btn);
       }
-      grid.appendChild(btn);
-    }
+      section.appendChild(grid);
+      root.appendChild(section);
+    });
+    els.levelsMeta.innerHTML = `${total}/${B.LEVELS.length * 3} ${STAR}`;
   }
 
   /* ---------- Einstellungen ---------- */
@@ -139,6 +155,7 @@
       resetBtn.textContent = 'Fortschritt zurücksetzen';
       resetBtn.classList.remove('armed');
       toast('Fortschritt zurückgesetzt');
+      if (!B.progress.isUnlocked(B.game.state.levelIndex)) B.game.loadLevel(0);
     });
   }
 
@@ -148,19 +165,17 @@
     els.levelNum.textContent = pad(index + 1);
     els.levelName.textContent = lvl.name;
     els.hint.textContent = lvl.hint || '';
-    els.hint.classList.remove('hidden');
-    els.countMax.textContent = lvl.maxBouncers;
+    els.hint.classList.toggle('hidden', !lvl.hint);
   }
 
-  function updateCounter(used, max) {
+  function updateCounter(used, par, canUndo) {
+    const stars = used === 0 ? 3 : B.game.starsFor(used, par);
     els.countUsed.textContent = used;
-    els.countMax.textContent = max;
-    let html = '';
-    for (let i = 0; i < max; i++) html += `<span class="pip${i < used ? ' on' : ''}"></span>`;
-    els.pips.innerHTML = html;
-    els.counter.classList.toggle('full', used >= max);
+    els.parLabel.textContent = `Par ${par}`;
+    els.miniStars.innerHTML = starsHtml(stars);
+    els.counter.classList.toggle('over', used > par);
     els.btnClear.disabled = mode !== 'build' || used === 0;
-    els.btnUndo.disabled = mode !== 'build' || used === 0;
+    els.btnUndo.disabled = mode !== 'build' || !canUndo;
   }
 
   function onModeChange(m) {
@@ -172,9 +187,9 @@
     els.icoPlay.style.display = running ? 'none' : '';
     els.icoStop.style.display = running ? '' : 'none';
     els.btnStart.disabled = m === 'capture' || m === 'won';
-    const n = B.game.state.bouncers.length;
-    els.btnClear.disabled = running || n === 0;
-    els.btnUndo.disabled = running || n === 0;
+    const g = B.game.state;
+    els.btnClear.disabled = running || g.bouncers.length === 0;
+    els.btnUndo.disabled = running || g.history.length === 0;
   }
 
   function hideHint() {
@@ -188,16 +203,19 @@
     toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2000);
   }
 
-  function showWin(r, index) {
+  function showWin(r, index, hasNext) {
     $('winEyebrow').textContent = `Level ${pad(index + 1)}`;
     $('winStars').innerHTML = [0, 1, 2]
       .map((i) => `<span class="star${i < r.stars ? ' on' : ''}" style="--d:${120 + i * 140}ms">${STAR}</span>`)
       .join('');
     $('winStats').textContent = `${r.used} Bouncer · Par ${r.par}`;
+    const last = index === B.LEVELS.length - 1;
     $('winNote').textContent = r.stars < 3
-      ? `Schaffst du es mit ${r.par} Bouncern?`
-      : 'Perfekt gelöst. Weitere Level folgen.';
+      ? `Schaffst du es mit ${r.par} Bouncer${r.par === 1 ? '' : 'n'}?`
+      : last ? 'Alle Level geschafft – stark!' : 'Perfekt gelöst.';
+    els.btnWinNext.hidden = !hasNext;
     openModal('win');
+    (hasNext ? els.btnWinNext : $('btnWinRetry')).focus({ preventScroll: true });
   }
 
   function init() {
@@ -206,17 +224,19 @@
       levelName: $('levelName'),
       hint: $('hint'),
       counter: $('counter'),
-      pips: $('pips'),
+      miniStars: $('miniStars'),
       countUsed: $('countUsed'),
-      countMax: $('countMax'),
+      parLabel: $('parLabel'),
       btnStart: $('btnStart'),
       btnStartLabel: $('btnStartLabel'),
       icoPlay: $('icoPlay'),
       icoStop: $('icoStop'),
       btnClear: $('btnClear'),
       btnUndo: $('btnUndo'),
+      btnWinNext: $('btnWinNext'),
       toast: $('toast'),
       levelGrid: $('levelGrid'),
+      levelsMeta: $('levelsMeta'),
       volume: $('setVolume'),
       volumeRow: $('volumeRow'),
       volumeValue: $('volumeValue'),
@@ -232,6 +252,10 @@
       el.addEventListener('click', () => closeModal(el.closest('.modal').dataset.modal));
     });
     $('btnWinRetry').addEventListener('click', () => closeModal('win'));
+    els.btnWinNext.addEventListener('click', () => {
+      closeModal('win');
+      B.game.nextLevel();
+    });
     $('btnWinLevels').addEventListener('click', () => {
       closeModal('win');
       renderLevelGrid();
